@@ -1,3 +1,6 @@
 .gradle
 .idea
 build
+
+# ignore results which are in folders with the block number as name (digits only)
+[0-9]*/

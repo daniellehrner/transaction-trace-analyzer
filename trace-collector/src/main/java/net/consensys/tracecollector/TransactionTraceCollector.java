@@ -33,14 +33,13 @@ public class TransactionTraceCollector {
       System.exit(1);
     }
 
-    final int blocksToTrace = Integer.parseInt(args[0]);
-    int successfullyTracedBlocks = 0;
-    String lastTracedBlockNumber = null;
+    final long blocksToTrace = Long.parseLong(args[0]);
+    long successfullyTracedBlocks = 0;
+    long lastTracedBlockNumber = 0;
 
     logger.info("Getting transaction for {} block(s)", blocksToTrace);
 
     while (successfullyTracedBlocks < blocksToTrace) {
-
       try {
         final JsonNode blockByNumberResponse = post("eth_getBlockByNumber", "\"latest\", false");
         final BlockByNumber block = mapper.treeToValue(blockByNumberResponse, BlockByNumber.class);
@@ -49,13 +48,14 @@ public class TransactionTraceCollector {
           logger.error("Block is null. Response result: {}", blockByNumberResponse.toString());
           System.exit(1);
         }
+        final long blockNumber = Long.parseLong(block.getNumber().substring(2), 16);
 
-        if (lastTracedBlockNumber != null && lastTracedBlockNumber.equals(block.getNumber())) {
-          logger.info("Received block {} as latest again. Retrying in 30s.", lastTracedBlockNumber);
-          Thread.sleep(30000);
+        if (lastTracedBlockNumber == blockNumber) {
+          logger.info("Received block {} as latest again. Retrying in 13s.", lastTracedBlockNumber);
+          Thread.sleep(13000);
+          continue;
         }
 
-        final Integer blockNumber = Integer.valueOf(block.getNumber(), 16);
         logger.info(
             "Got {} transactions from block {}", block.getTransactions().size(), blockNumber);
 
@@ -70,9 +70,13 @@ public class TransactionTraceCollector {
                   "debug_traceTransaction",
                   "\"" + transactionHash + "\",{\"disableStorage\":true}");
 
-          final Path transactionTraceFile = Paths.get(blockDir + transactionHash + ".json");
+          final Path transactionTraceFile = Paths.get(blockDir + "/" + transactionHash + ".json");
           writer.writeValue(transactionTraceFile.toFile(), transactionTraceResponse);
         }
+
+        successfullyTracedBlocks++;
+        lastTracedBlockNumber = blockNumber;
+
       } catch (JsonProcessingException e) {
         logger.error(
             "Error while converting eth_getBlockByNumber response to JSON: {}", e.getMessage());
@@ -96,7 +100,8 @@ public class TransactionTraceCollector {
 
     final RequestBody body = RequestBody.create(requestString, JSON);
 
-    final Request request = new Request.Builder().url("http://127.0.0.1:8545").post(body).build();
+    final Request request =
+        new Request.Builder().url("http://192.168.1.42:8545").post(body).build();
 
     try (Response response = client.newCall(request).execute()) {
       if (response.code() != 200) {
