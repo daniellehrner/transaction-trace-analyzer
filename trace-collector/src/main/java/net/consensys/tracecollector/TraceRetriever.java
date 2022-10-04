@@ -1,39 +1,40 @@
 package net.consensys.tracecollector;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.core.util.DefaultPrettyPrinter;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.databind.ObjectWriter;
 import java.io.IOException;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.Paths;
+import java.net.ConnectException;
+import java.net.SocketTimeoutException;
 import net.consensys.tracecollector.model.BlockByNumber;
 import okhttp3.MediaType;
 import okhttp3.OkHttpClient;
 import okhttp3.Request;
 import okhttp3.RequestBody;
 import okhttp3.Response;
-import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
-public class TransactionTraceCollector {
+public class TraceRetriever {
   private static final MediaType JSON = MediaType.get("application/json; charset=utf-8");
 
-  private static final OkHttpClient client = new OkHttpClient();
-  private static final ObjectMapper mapper = new ObjectMapper();
-  private static final ObjectWriter writer = mapper.writer(new DefaultPrettyPrinter());
-  private static final Logger logger = LogManager.getLogger(TransactionTraceCollector.class);
+  private final OkHttpClient client;
+  private final ObjectMapper mapper;
 
-  public static void main(String[] args) {
+  private final Logger logger;
+  private final TraceCollector traceCollector;
 
-    if (args.length == 0) {
-      logger.error("Number of blocks to trace needs to be provided as argument");
-      System.exit(1);
-    }
+  public TraceRetriever(
+      final OkHttpClient client,
+      final ObjectMapper mapper,
+      final Logger logger,
+      final TraceCollector traceCollector) {
+    this.client = client;
+    this.mapper = mapper;
+    this.logger = logger;
+    this.traceCollector = traceCollector;
+  }
 
-    final long blocksToTrace = Long.parseLong(args[0]);
+  public void retrieve(final String url, final long blocksToTrace) throws RuntimeException {
     long successfullyTracedBlocks = 0;
     long lastTracedBlockNumber = 0;
 
@@ -41,7 +42,8 @@ public class TransactionTraceCollector {
 
     while (successfullyTracedBlocks < blocksToTrace) {
       try {
-        final JsonNode blockByNumberResponse = post("eth_getBlockByNumber", "\"latest\", false");
+        final JsonNode blockByNumberResponse =
+            post(url, "eth_getBlockByNumber", "\"latest\", false");
         final BlockByNumber block = mapper.treeToValue(blockByNumberResponse, BlockByNumber.class);
 
         if (block == null) {
@@ -58,25 +60,29 @@ public class TransactionTraceCollector {
 
         logger.info(
             "Got {} transactions from block {}", block.getTransactions().size(), blockNumber);
+        traceCollector.newBlock(blockNumber);
 
-        final Path blockDir = Paths.get("./" + blockNumber);
-        Files.createDirectory(blockDir);
-
-        for (String transactionHash : block.getTransactions()) {
+        for (int i = 0; i < block.getTransactions().size(); i++) {
+          final String transactionHash = block.getTransactions().get(i);
           logger.info("Getting trace for transaction {}", transactionHash);
 
-          final JsonNode transactionTraceResponse =
+          final JsonNode transactionTrace =
               post(
+                  url,
                   "debug_traceTransaction",
                   "\"" + transactionHash + "\",{\"disableStorage\":true}");
 
-          final Path transactionTraceFile = Paths.get(blockDir + "/" + transactionHash + ".json");
-          writer.writeValue(transactionTraceFile.toFile(), transactionTraceResponse);
+          traceCollector.addTransactionTrace(i, transactionHash, transactionTrace);
         }
 
         successfullyTracedBlocks++;
         lastTracedBlockNumber = blockNumber;
-
+      } catch (ConnectException e) {
+        logger.error("Cannot connect to node");
+        throw new RuntimeException(e);
+      } catch (SocketTimeoutException e) {
+        logger.error("Timeout while calling the node");
+        throw new RuntimeException(e);
       } catch (JsonProcessingException e) {
         logger.error(
             "Error while converting eth_getBlockByNumber response to JSON: {}", e.getMessage());
@@ -84,12 +90,13 @@ public class TransactionTraceCollector {
         logger.error("Error during an RPC call to the node: {}", e.getMessage());
       } catch (InterruptedException e) {
         logger.error("Sleep of thread was interrupted. Shutting down");
-        System.exit(1);
+        throw new RuntimeException(e);
       }
     }
   }
 
-  private static JsonNode post(final String method, final String parameters) throws IOException {
+  private JsonNode post(final String url, final String method, final String parameters)
+      throws IOException {
     final String requestString =
         "{\"jsonrpc\":\"2.0\",\"method\":\""
             + method
@@ -100,13 +107,12 @@ public class TransactionTraceCollector {
 
     final RequestBody body = RequestBody.create(requestString, JSON);
 
-    final Request request =
-        new Request.Builder().url("http://192.168.1.42:8545").post(body).build();
+    final Request request = new Request.Builder().url(url).post(body).build();
 
     try (Response response = client.newCall(request).execute()) {
       if (response.code() != 200) {
         logger.error("Request was not successful: {}", response.body().string());
-        System.exit(1);
+        throw new RuntimeException();
       }
 
       final String responseString = response.body().string();
@@ -116,7 +122,7 @@ public class TransactionTraceCollector {
 
       if (responseNode.get("error") != null) {
         logger.error("Error while calling {}: {}", method, responseNode.get("error"));
-        System.exit(1);
+        throw new RuntimeException();
       }
 
       return responseNode.get("result");

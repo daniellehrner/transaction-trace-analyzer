@@ -1,80 +1,52 @@
 package net.consensys.traceanalyzer;
 
-import java.util.LinkedHashMap;
-import java.util.LinkedList;
+import net.lingala.zip4j.ZipFile;
+import net.lingala.zip4j.exception.ZipException;
+import net.lingala.zip4j.model.FileHeader;
+import org.apache.logging.log4j.Logger;
+
+import java.io.File;
+import java.io.IOException;
+import java.nio.file.DirectoryStream;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.List;
-import java.util.Map;
-import java.util.stream.Collectors;
 
 public class TraceAnalyzer {
-  public static void main(String[] args) {
-    System.out.println("Hello world!");
+  private final Logger logger;
 
-    //    final TransactionTrace transactionTrace =
-    //        mapper.treeToValue(transactionTraceResponse, TransactionTrace.class);
-    //
-    //    if (transactionTrace == null) {
-    //      logger.error("Trace result empty, block most probably too old");
-    //      System.exit(1);
-    //    }
-    //
-    //    if (transactionTrace.getStructLogs() == null) {
-    //      logger.info("\tNo struct log available");
-    //      continue;
-    //    }
-
-    //    for (StructLog structLog : transactionTrace.getStructLogs()) {
-    //      opCodeCounter.put(structLog.getOp(), opCodeCounter.getOrDefault(structLog.getOp(), 0) +
-    // 1);
-    //      logger.debug("\t{}: {}", structLog.getOp(), opCodeCounter.get(structLog.getOp()));
-    //
-    //      if (!selectedOpCodes.isEmpty() && selectedOpCodes.contains(structLog.getOp())) {
-    //        final int stackSize = structLog.getStack().length;
-    //
-    //        switch (structLog.getOp()) {
-    //          case "SLOAD":
-    //            logger.info("SLOAD:  key: {}", structLog.getStack()[stackSize - 1]);
-    //            break;
-    //          case "SSTORE":
-    //            logger.info("SSTORE: key: {}, value: {}", structLog.getStack()[stackSize - 1],
-    // structLog.getStack()[stackSize - 2]);
-    //            break;
-    //          default:
-    //            logger.info(structLog.toString());
-    //        }
-    //      }
-    //    }
-
-    //    try {
-    //      final FileWriter csvFile = new FileWriter(args[0] + "_op_codes.csv");
-    //      final Map<String, Integer> sortedOpCodeCounter = sortByValue(opCodeCounter);
-    //      sortedOpCodeCounter.forEach(
-    //          (opCode, totalCount) -> {
-    //            try {
-    //              csvFile.write(opCode + ";" + totalCount + "\n");
-    //            } catch (IOException e) {
-    //              throw new RuntimeException(e);
-    //            }
-    //            logger.info("{}: {}", opCode, totalCount);
-    //          });
-    //      csvFile.close();
-    //    } catch (IOException e) {
-    //      logger.error("Cannot write to file: {}", e.getMessage());
-    //    }
+  public TraceAnalyzer(final Logger logger) {
+    this.logger = logger;
   }
 
-  private static Map<String, Integer> sortByValue(Map<String, Integer> unsortedMap) {
-    List<Map.Entry<String, Integer>> list = new LinkedList<>(unsortedMap.entrySet());
+  public void analyzeDirectory(final String dir) throws RuntimeException {
+    try (DirectoryStream<Path> resultsDir = Files.newDirectoryStream(Paths.get(dir))) {
+      for (Path result : resultsDir) {
+        if (Files.isDirectory(result) && !result.toFile().getName().endsWith(".zip")) {
+          continue;
+        }
 
-    // Sorting the list based on values
-    list.sort(
-        (o1, o2) ->
-            o2.getValue().compareTo(o1.getValue()) == 0
-                ? o1.getKey().compareTo(o2.getKey())
-                : o2.getValue().compareTo(o1.getValue()));
-    return list.stream()
-        .collect(
-            Collectors.toMap(
-                Map.Entry::getKey, Map.Entry::getValue, (a, b) -> b, LinkedHashMap::new));
+        analyze(result.toFile());
+      }
+    } catch (ZipException e) {
+      logger.error("Error while reading zip file");
+      throw new RuntimeException(e);
+    } catch (IOException e) {
+      logger.error("Error while reading the trace result directory");
+      throw new RuntimeException(e);
+    }
+  }
+
+  private void analyze(final File resultZipFile) throws IOException {
+    logger.info("Analyzing {}", resultZipFile.getName());
+    final ZipFile file = new ZipFile(resultZipFile);
+
+    file.getFileHeaders().forEach(traceFileHeader -> {
+      file.extractFile(traceFileHeader, ".");
+    });
+
+
+    file.close();
   }
 }
