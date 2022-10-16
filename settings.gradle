@@ -1,3 +1,4 @@
-rootProject.name = 'transaction-trace-collector'
-include 'trace-collector'
-include 'trace-analyzer'
+rootProject.name = 'transaction-trace-analyze'
+include 'trace-collect'
+include 'trace-query'
+include 'trace-extract'
